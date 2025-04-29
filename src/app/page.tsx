@@ -1,103 +1,198 @@
-import Image from "next/image";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+"use client";
+
+import { useRef, useState, useEffect } from "react";
+import { io } from "socket.io-client";
+
+interface RTCSignalData {
+  offer?: RTCSessionDescriptionInit;
+  answer?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
+}
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [roomId, setRoomId] = useState("");
+  const [isConnected, setIsConnected] = useState(false);
+  const [mediaError, setMediaError] = useState<string>("");
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const peerConnection = useRef<RTCPeerConnection | null>(null);
+  const socketRef = useRef<any>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+  useEffect(() => {
+    // Initialize socket connection to our separate signaling server
+    socketRef.current = io("http://localhost:3002");
+
+    socketRef.current.on("connect", () => {
+      console.log("Connected to signaling server");
+    });
+
+    return () => {
+      socketRef.current?.disconnect();
+    };
+  }, []);
+
+  const initializeWebRTC = async () => {
+    try {
+      // Create RTCPeerConnection
+      peerConnection.current = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      // Request camera and microphone permissions
+      console.log("Requesting media permissions...");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+
+      // Attach the stream to the local video element
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+
+      // Add tracks to peer connection
+      stream.getTracks().forEach((track) => {
+        if (peerConnection.current) {
+          peerConnection.current.addTrack(track, stream);
+        }
+      });
+
+      // Handle incoming tracks
+      peerConnection.current.ontrack = (event) => {
+        console.log("Received remote track:", event.track.kind);
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+        }
+      };
+
+      // Handle ICE candidates
+      peerConnection.current.onicecandidate = (event) => {
+        if (event.candidate && socketRef.current) {
+          socketRef.current.emit("ice-candidate", {
+            roomId,
+            candidate: event.candidate,
+          });
+        }
+      };
+
+      setMediaError("");
+    } catch (error) {
+      console.error("Error accessing media devices:", error);
+      setMediaError(
+        "Failed to access camera or microphone. Please ensure you have granted the necessary permissions."
+      );
+    }
+  };
+
+  const setupSocketListeners = () => {
+    if (!socketRef.current || !peerConnection.current) return;
+
+    socketRef.current.on("peer-joined", async () => {
+      // Create and send offer when new peer joins
+      const offer = await peerConnection.current!.createOffer();
+      await peerConnection.current!.setLocalDescription(offer);
+      socketRef.current!.emit("offer", { roomId, offer });
+    });
+
+    socketRef.current.on("offer", async ({ offer }: RTCSignalData) => {
+      if (!offer) return;
+      await peerConnection.current!.setRemoteDescription(
+        new RTCSessionDescription(offer)
+      );
+      const answer = await peerConnection.current!.createAnswer();
+      await peerConnection.current!.setLocalDescription(answer);
+      socketRef.current!.emit("answer", { roomId, answer });
+    });
+
+    socketRef.current.on("answer", async ({ answer }: RTCSignalData) => {
+      if (!answer) return;
+      await peerConnection.current!.setRemoteDescription(
+        new RTCSessionDescription(answer)
+      );
+    });
+
+    socketRef.current.on(
+      "ice-candidate",
+      async ({ candidate }: RTCSignalData) => {
+        if (!candidate) return;
+        try {
+          await peerConnection.current!.addIceCandidate(
+            new RTCIceCandidate(candidate)
+          );
+        } catch (error) {
+          console.error("Error adding ICE candidate:", error);
+        }
+      }
+    );
+  };
+
+  const connectToRoom = async () => {
+    if (!roomId || !socketRef.current) return;
+
+    setIsConnected(true);
+    await initializeWebRTC();
+
+    // Join the room
+    socketRef.current.emit("join-room", roomId);
+    setupSocketListeners();
+  };
+
+  return (
+    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-500 to-purple-600 p-8">
+      <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 shadow-lg border border-white/20">
+        {mediaError && (
+          <div className="text-red-500 bg-red-100 p-4 rounded-lg mb-4">
+            {mediaError}
+          </div>
+        )}
+        {!isConnected ? (
+          <div className="flex flex-col gap-4 min-w-[300px]">
+            <h1 className="text-white text-2xl font-bold text-center mb-4">
+              WebRTC Demo
+            </h1>
+            <input
+              type="text"
+              value={roomId}
+              onChange={(e) => setRoomId(e.target.value)}
+              placeholder="Enter room ID"
+              className="px-4 py-3 rounded-lg bg-white/20 border-none text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-white/50"
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+            <button
+              onClick={connectToRoom}
+              className="px-4 py-3 rounded-lg bg-white text-purple-600 font-semibold hover:-translate-y-0.5 transition-transform duration-200 focus:outline-none focus:ring-2 focus:ring-white/50"
+            >
+              Join Room
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-6xl">
+            <div className="relative aspect-video bg-black/20 rounded-lg overflow-hidden">
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+              />
+              <span className="absolute bottom-4 left-4 text-white text-sm bg-black/50 px-3 py-1 rounded-full">
+                You
+              </span>
+            </div>
+            <div className="relative aspect-video bg-black/20 rounded-lg overflow-hidden">
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover"
+              />
+              <span className="absolute bottom-4 left-4 text-white text-sm bg-black/50 px-3 py-1 rounded-full">
+                Remote User
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
   );
 }
