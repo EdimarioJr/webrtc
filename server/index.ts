@@ -3,7 +3,11 @@ import { Server } from "socket.io";
 import cors from "cors";
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+  })
+);
 
 const server = app.listen(3002);
 const io = new Server(server, {
