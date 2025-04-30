@@ -37,6 +37,17 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
   });
+
+  // New WebSocket streaming handlers
+  socket.on("join-stream-room", (roomId: string) => {
+    socket.join(roomId);
+    console.log(`Client ${socket.id} joined streaming room ${roomId}`);
+  });
+
+  socket.on("video-chunk", ({ roomId, chunk }) => {
+    // Broadcast the video chunk to all other clients in the room
+    socket.to(roomId).emit("video-chunk", chunk);
+  });
 });
 
 const PORT = 3002;
