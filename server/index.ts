@@ -1,13 +1,12 @@
 import express from "express";
-import { createServer } from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 
 const app = express();
 app.use(cors());
 
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
+const server = app.listen(3002);
+const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
@@ -48,9 +47,4 @@ io.on("connection", (socket) => {
     // Broadcast the video chunk to all other clients in the room
     socket.to(roomId).emit("video-chunk", chunk);
   });
-});
-
-const PORT = 3002;
-httpServer.listen(PORT, () => {
-  console.log(`Signaling server running on port ${PORT}`);
 });
