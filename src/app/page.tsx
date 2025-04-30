@@ -21,7 +21,7 @@ export default function Home() {
 
   useEffect(() => {
     // Initialize socket connection to our separate signaling server
-    socketRef.current = io("http://localhost:3002");
+    socketRef.current = io("https://webrtc-28n5.onrender.com:3002");
 
     socketRef.current.on("connect", () => {
       console.log("Connected to signaling server");
